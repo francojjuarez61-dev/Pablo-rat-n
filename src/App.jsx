@@ -1,27 +1,17 @@
-import React, { useState, useEffect } from 'react';
-import { Users, Plus, Trash2, Flame, Cloud, X, Calendar, DollarSign, Loader2, CheckCircle2 } from 'lucide-react';
+Import React, { useState, useEffect } from 'react';
+import { Users, Plus, Trash2, Flame, Cloud, X, Calendar, DollarSign, Loader2, CheckCircle2, Save } from 'lucide-react';
 import { initializeApp } from "firebase/app";
-import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
+import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 import { getFirestore, doc, setDoc, onSnapshot } from "firebase/firestore";
 
-// --- CONFIGURACIÓN FIREBASE ---
-// NOTA: Estas variables deben estar en tu archivo .env
-const firebaseConfig = {
-  apiKey: process.env.REACT_APP_FIREBASE_API_KEY,
-  authDomain: process.env.REACT_APP_FIREBASE_AUTH_DOMAIN,
-  projectId: process.env.REACT_APP_FIREBASE_PROJECT_ID,
-  storageBucket: process.env.REACT_APP_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: process.env.REACT_APP_FIREBASE_MESSAGING_SENDER_ID,
-  appId: process.env.REACT_APP_FIREBASE_APP_ID
-};
-
-// Inicialización de la App
+// --- CONFIGURACIÓN FIREBASE (MANDATORIO) ---
+const firebaseConfig = JSON.parse(__firebase_config);
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-const APP_ID = 'imperio-infernal-v1'; // ID fijo para la estructura de la base de datos
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 
-// --- COMPONENTE MODAL DE CARGA ---
+// --- COMPONENTE MODAL DE CARGA (Sin cambios visuales) ---
 const EntryModal = ({ isOpen, onClose, onSave, theme, title }) => {
   const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth());
   const [periodType, setPeriodType] = useState('week'); 
@@ -161,19 +151,18 @@ const EarningsCalculator = () => {
   const [activeModal, setActiveModal] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [manualSaveSuccess, setManualSaveSuccess] = useState(false);
 
   // --- EFECTO 1: AUTENTICACIÓN ---
   useEffect(() => {
-    // Intentamos loguear anónimamente si no hay usuario
     const initAuth = async () => {
-        try {
-            await signInAnonymously(auth);
-        } catch (error) {
-            console.error("Error en autenticación:", error);
-        }
+      if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+        await signInWithCustomToken(auth, __initial_auth_token);
+      } else {
+        await signInAnonymously(auth);
+      }
     };
     initAuth();
-
     const unsubscribe = onAuthStateChanged(auth, (u) => {
         setUser(u);
     });
@@ -185,7 +174,7 @@ const EarningsCalculator = () => {
     if (!user) return;
 
     // Referencia al documento único donde guardaremos todo
-    const docRef = doc(db, 'artifacts', APP_ID, 'users', user.uid, 'financials', 'data');
+    const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'financials', 'data');
 
     // Escuchar cambios en tiempo real
     const unsubscribe = onSnapshot(docRef, (docSnap) => {
@@ -199,7 +188,7 @@ const EarningsCalculator = () => {
         setEmployees([]);
       }
       setLoading(false);
-      setSaving(false);
+      setSaving(false); // Cuando llega el snapshot, significa que se guardó
     }, (error) => {
         console.error("Error al leer datos:", error);
         setLoading(false);
@@ -212,15 +201,40 @@ const EarningsCalculator = () => {
   const saveToFirestore = async (newBossEntries, newEmployees) => {
     if (!user) return;
     setSaving(true);
-    const docRef = doc(db, 'artifacts', APP_ID, 'users', user.uid, 'financials', 'data');
+    const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'financials', 'data');
     
     try {
         await setDoc(docRef, {
             bossEntries: newBossEntries !== undefined ? newBossEntries : bossEntries,
             employees: newEmployees !== undefined ? newEmployees : employees
         }, { merge: true });
+        // No necesitamos setSaving(false) aquí porque el onSnapshot lo maneja para auto-save
     } catch (e) {
         console.error("Error al guardar:", e);
+        setSaving(false);
+    }
+  };
+
+  // --- FUNCIÓN DE GUARDADO MANUAL (Botón "Guardar Todo") ---
+  const handleManualSave = async () => {
+    if (!user) return;
+    setSaving(true);
+    setManualSaveSuccess(false);
+    
+    // Forzamos el guardado de los estados actuales
+    const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'financials', 'data');
+    try {
+        await setDoc(docRef, {
+            bossEntries: bossEntries,
+            employees: employees
+        }, { merge: true });
+        
+        // Feedback visual específico para el guardado manual
+        setSaving(false);
+        setManualSaveSuccess(true);
+        setTimeout(() => setManualSaveSuccess(false), 3000);
+    } catch (e) {
+        console.error("Error al guardar manual:", e);
         setSaving(false);
     }
   };
@@ -240,16 +254,18 @@ const EarningsCalculator = () => {
 
   const totalBossEarnings = bossTotalGenerated + totalFromEmployees;
 
-  // --- GESTIÓN DE DATOS ---
+  // --- GESTIÓN DE DATOS (Actualización optimista + Guardado) ---
 
   const handleBossSave = (entryData) => {
     const newEntry = { id: Date.now(), ...entryData };
     const newBossEntries = [newEntry, ...bossEntries];
+    setBossEntries(newBossEntries); // Actualización inmediata (Optimista)
     saveToFirestore(newBossEntries, undefined);
   };
 
   const removeBossEntry = (entryId) => {
     const newBossEntries = bossEntries.filter(entry => entry.id !== entryId);
+    setBossEntries(newBossEntries);
     saveToFirestore(newBossEntries, undefined);
   };
 
@@ -263,11 +279,13 @@ const EarningsCalculator = () => {
       isWife: false 
     };
     const newEmployees = [...employees, newEmployee];
+    setEmployees(newEmployees);
     saveToFirestore(undefined, newEmployees);
   };
 
   const removeEmployee = (id) => {
     const newEmployees = employees.filter(e => e.id !== id);
+    setEmployees(newEmployees);
     saveToFirestore(undefined, newEmployees);
   };
 
@@ -281,6 +299,7 @@ const EarningsCalculator = () => {
       }
       return e;
     });
+    setEmployees(newEmployees);
     saveToFirestore(undefined, newEmployees);
   };
 
@@ -292,6 +311,7 @@ const EarningsCalculator = () => {
       }
       return emp;
     });
+    setEmployees(newEmployees);
     saveToFirestore(undefined, newEmployees);
   };
 
@@ -302,6 +322,7 @@ const EarningsCalculator = () => {
       }
       return emp;
     });
+    setEmployees(newEmployees);
     saveToFirestore(undefined, newEmployees);
   };
 
@@ -311,7 +332,7 @@ const EarningsCalculator = () => {
           <div className="min-h-screen bg-black flex flex-col items-center justify-center text-red-500">
               <Flame className="w-12 h-12 animate-bounce mb-4" />
               <p className="font-bold text-xl animate-pulse">Abriendo las Puertas del Infierno...</p>
-              <p className="text-sm text-red-800 mt-2">Cargando datos guardados</p>
+              <p className="text-sm text-red-800 mt-2">Recuperando la memoria del sistema</p>
           </div>
       );
   }
@@ -325,11 +346,17 @@ const EarningsCalculator = () => {
          <div className="absolute top-[-10%] right-[-10%] w-[50%] h-[50%] bg-red-600 rounded-full blur-[120px]"></div>
       </div>
 
-      {/* Indicador de Estado de Guardado */}
-      <div className="absolute top-4 right-4 z-50">
-        <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full backdrop-blur-md border transition-all ${saving ? 'bg-yellow-900/50 border-yellow-700 text-yellow-500' : 'bg-green-900/30 border-green-800 text-green-400'}`}>
-            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
-            <span className="text-xs font-bold uppercase tracking-wider">{saving ? 'Guardando...' : 'Guardado'}</span>
+      {/* Indicador de Estado de Guardado (Esquina Superior Derecha) */}
+      <div className="absolute top-4 right-4 z-50 flex gap-2">
+        {manualSaveSuccess && (
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-full backdrop-blur-md bg-green-500 text-white shadow-lg animate-in fade-in slide-in-from-top-2">
+                <CheckCircle2 className="w-4 h-4" />
+                <span className="text-xs font-bold uppercase tracking-wider">¡Guardado Exitoso!</span>
+            </div>
+        )}
+        <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full backdrop-blur-md border transition-all ${saving ? 'bg-yellow-900/50 border-yellow-700 text-yellow-500' : 'bg-black/30 border-white/10 text-slate-300'}`}>
+            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Cloud className="w-4 h-4" />}
+            <span className="text-xs font-bold uppercase tracking-wider">{saving ? 'Sincronizando...' : 'En Línea'}</span>
         </div>
       </div>
 
@@ -344,9 +371,20 @@ const EarningsCalculator = () => {
             </span>
             <Flame className="w-10 h-10 text-orange-600 fill-orange-500 animate-pulse" />
           </h1>
-          <p className="text-red-200/80 italic">
+          <p className="text-red-200/80 italic mb-4">
             "Sistema de Tributos con Memoria Eterna"
           </p>
+
+          {/* BOTÓN DE GUARDADO MANUAL GRANDE */}
+          <button 
+            onClick={handleManualSave}
+            disabled={saving}
+            className="group relative inline-flex items-center justify-center gap-2 px-8 py-3 bg-gradient-to-r from-orange-700 to-red-700 text-white rounded-full font-bold shadow-[0_0_20px_rgba(234,88,12,0.5)] hover:shadow-[0_0_30px_rgba(234,88,12,0.8)] hover:scale-105 transition-all disabled:opacity-70 disabled:cursor-not-allowed disabled:hover:scale-100"
+          >
+            <Save className={`w-5 h-5 ${saving ? 'animate-spin' : 'group-hover:animate-pulse'}`} />
+            {saving ? 'GUARDANDO EN EL SERVIDOR...' : 'GUARDAR TODO EL PROGRESO'}
+            <div className="absolute inset-0 rounded-full ring-2 ring-white/20 group-hover:ring-white/40"></div>
+          </button>
         </header>
 
         {/* Resumen Superior - EL JEFE (DIABLO) */}
@@ -574,8 +612,8 @@ const EarningsCalculator = () => {
           </div>
         </div>
 
-        <div className="mt-8 text-center text-sm text-red-900/40 font-serif italic">
-          * Todos tus datos están seguros en las profundidades del servidor.
+        <div className="mt-8 text-center text-sm text-red-900/40 font-serif italic pb-8">
+          * Presiona "Guardar Todo el Progreso" antes de salir para asegurar tus cambios.
         </div>
 
       </div>

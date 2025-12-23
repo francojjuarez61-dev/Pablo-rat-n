@@ -1,17 +1,29 @@
-Import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Users, Plus, Trash2, Flame, Cloud, X, Calendar, DollarSign, Loader2, CheckCircle2, Save } from 'lucide-react';
 import { initializeApp } from "firebase/app";
-import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged } from "firebase/auth";
+import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 import { getFirestore, doc, setDoc, onSnapshot } from "firebase/firestore";
 
-// --- CONFIGURACIÓN FIREBASE (MANDATORIO) ---
-const firebaseConfig = JSON.parse(__firebase_config);
+// --- ⚠️ IMPORTANTE: PEGA AQUÍ TUS DATOS DE FIREBASE ---
+// Ve a tu consola de Firebase > Configuración del proyecto > General
+// y copia los valores del objeto "firebaseConfig" aquí:
+const firebaseConfig = {
+  apiKey: "TU_API_KEY_AQUI",
+  authDomain: "TU_PROYECTO.firebaseapp.com",
+  projectId: "TU_PROJECT_ID",
+  storageBucket: "TU_BUCKET.appspot.com",
+  messagingSenderId: "TU_SENDER_ID",
+  appId: "TU_APP_ID"
+};
+
+// --- INICIALIZACIÓN ---
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+// ID único para guardar los datos en la base de datos
+const appId = 'imperio-infernal-app-v1'; 
 
-// --- COMPONENTE MODAL DE CARGA (Sin cambios visuales) ---
+// --- COMPONENTE MODAL DE CARGA ---
 const EntryModal = ({ isOpen, onClose, onSave, theme, title }) => {
   const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth());
   const [periodType, setPeriodType] = useState('week'); 
@@ -155,14 +167,11 @@ const EarningsCalculator = () => {
 
   // --- EFECTO 1: AUTENTICACIÓN ---
   useEffect(() => {
-    const initAuth = async () => {
-      if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-        await signInWithCustomToken(auth, __initial_auth_token);
-      } else {
-        await signInAnonymously(auth);
-      }
-    };
-    initAuth();
+    // Intentar inicio de sesión anónimo estándar
+    signInAnonymously(auth).catch((error) => {
+      console.error("Error en autenticación anónima:", error);
+    });
+
     const unsubscribe = onAuthStateChanged(auth, (u) => {
         setUser(u);
     });
@@ -190,7 +199,7 @@ const EarningsCalculator = () => {
       setLoading(false);
       setSaving(false); // Cuando llega el snapshot, significa que se guardó
     }, (error) => {
-        console.error("Error al leer datos:", error);
+        console.error("Error al leer datos (posible falta de permisos o configuración):", error);
         setLoading(false);
     });
 
@@ -208,7 +217,6 @@ const EarningsCalculator = () => {
             bossEntries: newBossEntries !== undefined ? newBossEntries : bossEntries,
             employees: newEmployees !== undefined ? newEmployees : employees
         }, { merge: true });
-        // No necesitamos setSaving(false) aquí porque el onSnapshot lo maneja para auto-save
     } catch (e) {
         console.error("Error al guardar:", e);
         setSaving(false);
@@ -221,7 +229,6 @@ const EarningsCalculator = () => {
     setSaving(true);
     setManualSaveSuccess(false);
     
-    // Forzamos el guardado de los estados actuales
     const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'financials', 'data');
     try {
         await setDoc(docRef, {
@@ -229,7 +236,6 @@ const EarningsCalculator = () => {
             employees: employees
         }, { merge: true });
         
-        // Feedback visual específico para el guardado manual
         setSaving(false);
         setManualSaveSuccess(true);
         setTimeout(() => setManualSaveSuccess(false), 3000);
@@ -254,12 +260,12 @@ const EarningsCalculator = () => {
 
   const totalBossEarnings = bossTotalGenerated + totalFromEmployees;
 
-  // --- GESTIÓN DE DATOS (Actualización optimista + Guardado) ---
+  // --- GESTIÓN DE DATOS ---
 
   const handleBossSave = (entryData) => {
     const newEntry = { id: Date.now(), ...entryData };
     const newBossEntries = [newEntry, ...bossEntries];
-    setBossEntries(newBossEntries); // Actualización inmediata (Optimista)
+    setBossEntries(newBossEntries); 
     saveToFirestore(newBossEntries, undefined);
   };
 
@@ -332,7 +338,7 @@ const EarningsCalculator = () => {
           <div className="min-h-screen bg-black flex flex-col items-center justify-center text-red-500">
               <Flame className="w-12 h-12 animate-bounce mb-4" />
               <p className="font-bold text-xl animate-pulse">Abriendo las Puertas del Infierno...</p>
-              <p className="text-sm text-red-800 mt-2">Recuperando la memoria del sistema</p>
+              <p className="text-sm text-red-800 mt-2">Conectando con el servidor...</p>
           </div>
       );
   }
@@ -346,7 +352,7 @@ const EarningsCalculator = () => {
          <div className="absolute top-[-10%] right-[-10%] w-[50%] h-[50%] bg-red-600 rounded-full blur-[120px]"></div>
       </div>
 
-      {/* Indicador de Estado de Guardado (Esquina Superior Derecha) */}
+      {/* Indicador de Estado de Guardado */}
       <div className="absolute top-4 right-4 z-50 flex gap-2">
         {manualSaveSuccess && (
             <div className="flex items-center gap-2 px-3 py-1.5 rounded-full backdrop-blur-md bg-green-500 text-white shadow-lg animate-in fade-in slide-in-from-top-2">
@@ -375,7 +381,6 @@ const EarningsCalculator = () => {
             "Sistema de Tributos con Memoria Eterna"
           </p>
 
-          {/* BOTÓN DE GUARDADO MANUAL GRANDE */}
           <button 
             onClick={handleManualSave}
             disabled={saving}
